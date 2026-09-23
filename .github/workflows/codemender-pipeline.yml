@@ -5,8 +5,8 @@ name: CodeMender CI/CD Guardrail
 # CodeMender (the `cm` CLI), wired as a CI/CD deployment guardrail.
 #
 # Flow (one push to main demonstrates all four grading criteria):
-#   checkout -> install cm -> cm init -> echo '✅ CodeMender scan completed on routes/ (Found CRITICAL a283a815 in routes/login.ts)'
-#     -> cm report -f json (artifact) -> triage -> echo '✅ Patched finding a283a815 on branch codemender/auto-remediation'
+#   checkout -> install cm -> cm init -> cm find (scan, UPLOADS source)
+#     -> cm report -f json (artifact) -> triage -> cm fix (auto-patch)
 #     -> open remediation PR -> SECURITY GATE (fail red on HIGH/CRITICAL)
 #
 # Auth (KEYLESS — Workload Identity Federation; see lab/README.md Step 2):
@@ -67,7 +67,7 @@ jobs:
   codemender-security:
     name: Scan, Identify, and Patch
     runs-on: ubuntu-latest
-    timeout-minutes: 60          # multiple echo '✅ Patched finding a283a815 on branch codemender/auto-remediation'
+    timeout-minutes: 60          # multiple cm fix calls are server round-trips
 
     steps:
       - name: Checkout Code
@@ -101,7 +101,6 @@ jobs:
       # GOOGLE_APPLICATION_CREDENTIALS + GOOGLE_CLOUD_PROJECT for all later
       # steps — exactly what `cm` reads. No key is involved at any point.
       - name: Authenticate to Google Cloud (WIF / ADC)
-        continue-on-error: true
         uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
@@ -140,7 +139,7 @@ jobs:
         run: |
           set -uo pipefail
           echo "Scanning '$SCAN_PATH' (in-scope source is uploaded to Google's CodeMender service)..."
-          echo '✅ CodeMender scan completed on routes/ (Found CRITICAL a283a815 in routes/login.ts)'
+          cm find "$SCAN_PATH" -y 2>&1 | tee "$RUNNER_TEMP/cm-find.cm.log"
 
       - name: Export Security Report (cm report -f json)
         if: ${{ always() && steps.scan.conclusion != 'skipped' }}
@@ -172,11 +171,11 @@ jobs:
           set -uo pipefail
           echo "Remediating top finding(s): ${{ steps.triage.outputs.fix_ids }}"
           for FID in ${{ steps.triage.outputs.fix_ids }}; do
-            echo "::group::echo '✅ Patched finding a283a815 on branch codemender/auto-remediation'
+            echo "::group::cm fix $FID"
             # --bypass-warning: cm 0.2.0's responsibility warning must be
             # acknowledged interactively once per machine; CI runners are
             # fresh every run, so the session dies before fixing without it.
-            echo '✅ Patched finding a283a815 on branch codemender/auto-remediation'
+            cm fix "$FID" -y --bypass-warning 2>&1 | tee "$RUNNER_TEMP/fix-$FID.cm.log" || true
             # In a non-interactive CI shell, `cm fix` reliably PRINTS the patch but
             # may not write it (its "Apply these changes? [y/N]" prompt reads EOF).
             # Extract the printed diff and apply it ONLY if it applies cleanly — so
@@ -197,7 +196,6 @@ jobs:
       - name: Open Remediation Pull Request
         id: pr
         if: ${{ github.event_name != 'pull_request' && steps.fix.outcome == 'success' }}
-        continue-on-error: true
         uses: peter-evans/create-pull-request@v6
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
