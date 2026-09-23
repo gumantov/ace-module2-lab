@@ -1,0 +1,23 @@
+[
+  {
+    "FindingID": "a283a815-f504-5314-89a2-846d81e7c0f3",
+    "SessionID": "ChBlYTFjZGI5MjAzZWEzOTczEAgaATAqBG1haW4",
+    "Title": "SQL Injection leading to Authentication Bypass in Login Route",
+    "FilePath": "/config/ace-module2-lab/routes/login.ts",
+    "Severity": "CRITICAL",
+    "Confidence": 100,
+    "Analysis": "The login route handler constructs a raw SQL query by directly interpolating untrusted user input from `req.body.email` into a template literal without parameterized query bindings or input sanitization:\n`SELECT * FROM Users WHERE email = '${req.body.email || ''}' AND password = '${security.hash(req.body.password || '')}' AND deletedAt IS NULL`\n\n### Data Flow:\n- **Source**: `req.body.email` (untrusted JSON or URL-encoded POST body parameter from HTTP request).\n- **Sanitization/Validation**: None. The expression `req.body.email || ''` merely defaults null/undefined values to empty strings.\n- **Sink**: `models.sequelize.query(..., { model: UserModel, plain: true })`.\n\n### Conceptual Exploit Payload:\nAn attacker can bypass authentication completely and log in as the administrator (or any other user) by injecting SQL syntax to comment out the rest of the query:\n\n```http\nPOST /rest/user/login HTTP/1.1\nHost: localhost:3000\nContent-Type: application/json\n\n{\n  \"email\": \"' OR 1=1;--\",\n  \"password\": \"irrelevant_password\"\n}\n```\nOr to specifically authenticate as the administrator:\n```json\n{\n  \"email\": \"admin@juice-sh.op'--\",\n  \"password\": \"any\"\n}\n```\nThe resulting SQL query executed against the database becomes:\n`SELECT * FROM Users WHERE email = 'admin@juice-sh.op'--' AND password = '...' AND deletedAt IS NULL`\nBecause `--` comments out the password and deletion checks, the query returns the administrator user record, authenticating the attacker as admin.",
+    "Snippet": "    models.sequelize.query(`SELECT * FROM Users WHERE email = '${req.body.email || ''}' AND password = '${security.hash(req.body.password || '')}' AND deletedAt IS NULL`, { model: UserModel, plain: true })",
+    "VulnType": "SQL Injection",
+    "VulnID": "CWE-89",
+    "Fingerprint": "",
+    "Status": "OPEN",
+    "SourceStage": "",
+    "FindingJSON": "",
+    "UpdatedAt": "",
+    "StartLine": 34,
+    "EndLine": 34,
+    "DismissReason": "",
+    "ConfidenceLevel": ""
+  }
+]
